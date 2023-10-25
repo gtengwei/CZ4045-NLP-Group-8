@@ -13,14 +13,21 @@ from seqeval.metrics import f1_score
 
 import tqdm
 import time
+from datetime import datetime
 import pickle
 import os
 from itertools import repeat
 from torch.utils.tensorboard import SummaryWriter
 
-# Try to load if present
-# Download 'word2vec-google-news-300' embeddings
-google_news_vectors = gensim.downloader.load('word2vec-google-news-300')
+from gensim.models import KeyedVectors
+# Download 'word2vec-google-news-300' embeddings, or load it if it's there alr
+
+VECTOR_PATH = "word2vec-google-news-300.kv"
+if os.path.exists(VECTOR_PATH):
+    google_news_vectors = KeyedVectors.load(VECTOR_PATH)
+else:
+    google_news_vectors = gensim.downloader.load('word2vec-google-news-300')
+    google_news_vectors.save(VECTOR_PATH)
 
 # Load all the data required
 with open("BIO_train.txt", "r") as f:
@@ -92,10 +99,10 @@ encoder.fit(np.array(list(range(9))).reshape(-1, 1))
 # Create Dataset
 class NERDataset(Dataset):
     # TODO: Try out using packed sequences to reduce computation (but now seems like loss and score cal is bottleneck so there's that)
-    def __init__(self, file, embedding= google_news_vectors, label_map= label_map, encoder= encoder, max_length= MAX_LENGTH):
+    def __init__(self, file, embedding= google_news_vectors, label_map= label_map, max_length= MAX_LENGTH):
         # Split into X and y
         self.X = [] # Shape = (Sentence, word, len(embedding)= 300)
-        self.y = [] # Shape = (Sentence, Word, len(tagset)= 9)
+        self.y = [] # Shape = (Sentence, Word)
         self.max_length = max_length
         sentence_words = []
         sentence_tags = []
@@ -103,10 +110,12 @@ class NERDataset(Dataset):
         for line in tqdm.tqdm(file):
             if line != "\n":
                 word, tag = line.split()
+                # Get the embeddings for each word (X)
                 try:
                     sentence_words.append(embedding[word])
                 except KeyError:
                     sentence_words.append(embedding["UNK"])
+                # Convert the tag into index (y)
                 sentence_tags.append([label_map[tag]])
             else:
                 # Pad to ensure that the sequence length is the same for easy batching
@@ -114,7 +123,8 @@ class NERDataset(Dataset):
                 # Front padding is used as it performs better
                 pad_width = self.max_length - len(sentence_words)
                 self.X.append(np.pad(np.array(sentence_words), ((pad_width, 0), (0, 0)), mode= "constant", constant_values= [0]))
-                self.y.append(np.pad(encoder.transform(np.array(sentence_tags)), ((pad_width, 0), (0, 0)), mode= "constant", constant_values= [0]))
+                # self.y.append(np.pad(encoder.transform(np.array(sentence_tags)), ((pad_width, 0), (0, 0)), mode= "constant", constant_values= [0]))
+                self.y.append(np.pad(np.array(sentence_tags, dtype= np.longlong), ((pad_width, 0), (0, 0)), mode= "constant", constant_values= [-100]))
                 self.pad_width.append(pad_width)
                 # self.X.append(np.array(sentence_words))
                 # self.y.append(encoder.transform(np.array(sentence_tags)))
@@ -124,14 +134,14 @@ class NERDataset(Dataset):
         if sentence_words:
             pad_width = self.max_length - len(sentence_words)
             self.X.append(np.pad(np.array(sentence_words), ((pad_width, 0), (0, 0)), mode= "constant", constant_values= [0]))
-            self.y.append(np.pad(encoder.transform(np.array(sentence_tags)), ((pad_width, 0), (0, 0)), mode= "constant", constant_values= [0]))
+            self.y.append(np.pad(np.array(sentence_tags, dtype= np.longlong), ((pad_width, 0), (0, 0)), mode= "constant", constant_values= [-100]))
             self.pad_width.append(pad_width)
             sentence_words = []
             sentence_tags = []
         
         # Convert to tensors
         self.X = torch.tensor(np.array(self.X), device= DEVICE)
-        self.y = torch.tensor(np.array(self.y), device= DEVICE)
+        self.y = torch.tensor(np.array(self.y), device= DEVICE).squeeze(2)
         self.pad_width = torch.tensor(np.array(self.pad_width), device= DEVICE)
         
     
@@ -141,9 +151,31 @@ class NERDataset(Dataset):
     def __getitem__(self, idx):
         return self.X[idx], self.y[idx], self.pad_width[idx] 
 
-train_ds = NERDataset(data_train)
-dev_ds = NERDataset(data_dev)
-test_ds = NERDataset(data_test)
+# Load if already there else reinstantiate
+# Train
+if os.path.exists("./data/train_ds.pkl"):
+    with open("./data/train_ds.pkl", "rb") as f:
+        train_ds = pickle.load(f)
+else:
+    train_ds = NERDataset(data_train)
+    with open("./data/train_ds.pkl", "wb") as f:
+        pickle.dump(train_ds, f)
+# Dev
+if os.path.exists("./data/dev_ds.pkl"):
+    with open("./data/dev_ds.pkl", "rb") as f:
+        dev_ds = pickle.load(f)
+else:
+    dev_ds = NERDataset(data_dev)
+    with open("./data/dev_ds.pkl", "wb") as f:
+        pickle.dump(dev_ds, f)
+# Test
+if os.path.exists("./data/test_ds.pkl"):
+    with open("./data/test_ds.pkl", "rb") as f:
+        test_ds = pickle.load(f)
+else:
+    test_ds = NERDataset(data_test)
+    with open("./data/test_ds.pkl", "wb") as f:
+        pickle.dump(test_ds, f)
 
 # Create Dataloaders
 train_dataloader = DataLoader(train_ds, BATCH_SIZE, shuffle= True)
@@ -168,32 +200,13 @@ class EarlyStopper:
             if self.counter >= self.patience:
                 return True
         return False
-
-def unpad_CrossEntropyLoss(target, pred, pad_width):
-    """
-    Custom loss function to account to variable sequence length in a single batch
-    """
-    # loss = torch.tensor(0.0, device= DEVICE)
-    # for entry in range(len(target)):
-    #     loss += torch.nn.functional.cross_entropy(target[entry][pad_width[entry]:], pred[entry][pad_width[entry]:])
-    # loss /= target.shape[0]
-    # return loss
-    
-    # Example matrix
-
-    # Create a mask array based on the indices
-    for sentence, word in enumerate(pad_width):
-        target[sentence, :word] = -100
-        # pred[sentence, :word] = -100
-    
-    return nn.functional.cross_entropy(pred, target, ignore_index= -100)
-
-        
+            
 def train_model(model, train_dataloader, val_dataloader, early_stop= True, n_epochs= 100):
-    writer = SummaryWriter()
+    run_time = datetime.now().strftime('%d_%m_%y_%H%M%S')
+    writer = SummaryWriter(f"runs/{run_time}")
     
     
-    optimizer = torch.optim.Adam(model.parameters(), lr= 0.0001)
+    optimizer = torch.optim.Adam(model.parameters(), lr= 0.001)
     # In case anything goes wrong
     torch.autograd.set_detect_anomaly(True)
 
@@ -228,7 +241,7 @@ def train_model(model, train_dataloader, val_dataloader, early_stop= True, n_epo
             # print(f"Time to forward pass: {toc-toc2}")
             # print("Passed")
             # loss = nn.functional.cross_entropy(y_pred, y_batch, ignore_index= -100)
-            loss = unpad_CrossEntropyLoss(y_batch, y_pred, pad_batch)
+            loss = nn.functional.cross_entropy(torch.swapaxes(y_pred, 1, 2), y_batch, ignore_index= -100)
             train_loss_epoch.append(loss.detach().cpu())
             toc2 = time.time()
             # print(f"Time to calculate loss: {toc2 - toc}")
@@ -246,7 +259,8 @@ def train_model(model, train_dataloader, val_dataloader, early_stop= True, n_epo
             
             # Decode the sentences and get the f1 score using seqeval
             # Get the labels, shape = (sentence, word, categories) -> (sentence, word), where each word is a label from 0 - 9
-            target_idx = torch.max(y_batch, 2)[1]
+            target_idx = y_batch
+            # target_idx = torch.max(y_batch, 2)[1]
             pred_idx = torch.max(y_pred, 2)[1]
             
             vectorized_fn = np.vectorize(index_map.get)
@@ -274,12 +288,14 @@ def train_model(model, train_dataloader, val_dataloader, early_stop= True, n_epo
                 X_batch, y_batch, pad_batch = batch
                 # forward pass
                 y_pred = model(X_batch)
-                loss = unpad_CrossEntropyLoss(y_pred, y_batch, pad_batch)
+                # loss = unpad_CrossEntropyLoss(y_pred, y_batch, pad_batch)
+                loss = nn.functional.cross_entropy(torch.swapaxes(y_pred, 1, 2), y_batch, ignore_index= -100)
 
                 
                 test_loss_epoch.append(loss.detach().cpu())
                 
-                target_idx = torch.max(y_batch, 2)[1]
+                target_idx = y_batch
+                # target_idx = torch.max(y_batch, 2)[1]
                 pred_idx = torch.max(y_pred, 2)[1]
                 
                 vectorized_fn = np.vectorize(index_map.get)
@@ -291,7 +307,7 @@ def train_model(model, train_dataloader, val_dataloader, early_stop= True, n_epo
         # Calculate the epoch acc and loss
         test_loss.append(np.mean(test_loss_epoch))
         test_acc.append(np.mean(test_acc_epoch))
-        print(f"Epoch: {epoch} Train Loss: {train_loss[-1]} Test Loss: {test_loss[-1]}")
+        # print(f"Epoch: {epoch} Train Loss: {train_loss[-1]} Test Loss: {test_loss[-1]}")
         
         epoch_time.append(time.time() - tic)
         
@@ -312,5 +328,5 @@ def train_model(model, train_dataloader, val_dataloader, early_stop= True, n_epo
 model = simple_lstm().to(DEVICE)
 train_loss, train_acc, test_loss, test_acc, epoch_time, best_model = train_model(model, train_dataloader, dev_dataloader)
 
-with open(f"train_results/{time.time()}.pkl", "wb") as f:
+with open(f"train_results/{datetime.now().strftime('%d_%m_%y_%H%M%S')}.pkl", "wb") as f:
     pickle.dump((train_loss, train_acc, test_loss, test_acc, epoch_time, best_model), f)
