@@ -1,2 +1,9 @@
 runs/
 train_results/
+
+# Word2Vec models
+*.kv
+*.npy
+
+# Datasets
+data/
