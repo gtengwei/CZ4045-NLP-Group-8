@@ -151,6 +151,10 @@ class NERDataset(Dataset):
     def __getitem__(self, idx):
         return self.X[idx], self.y[idx], self.pad_width[idx] 
 
+# Create data folder if not exist
+if not os.path.exists("./data/"):
+    os.makedirs("./data/")
+
 # Load if already there else reinstantiate
 # Train
 if os.path.exists("./data/train_ds.pkl"):
@@ -328,5 +332,8 @@ def train_model(model, train_dataloader, val_dataloader, early_stop= True, n_epo
 model = simple_lstm().to(DEVICE)
 train_loss, train_acc, test_loss, test_acc, epoch_time, best_model = train_model(model, train_dataloader, dev_dataloader)
 
+# Create folder if not exist
+if not os.path.exists("./train_results/"):
+    os.makedirs("./train_results/")
 with open(f"train_results/{datetime.now().strftime('%d_%m_%y_%H%M%S')}.pkl", "wb") as f:
     pickle.dump((train_loss, train_acc, test_loss, test_acc, epoch_time, best_model), f)
