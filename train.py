@@ -10,6 +10,8 @@ from torch.utils.data import DataLoader
 from seqeval.metrics import accuracy_score
 from seqeval.metrics import classification_report
 from seqeval.metrics import f1_score
+from torcheval.metrics.functional import multiclass_f1_score
+
 
 import tqdm
 import time
@@ -55,7 +57,7 @@ print(f"Maximum Sentence Length: {max_length}, Embedding Shape: {vec.shape}, No.
 
 # Build simple LSTM model
 # Define constants/params
-HIDDEN_SIZE = 128
+HIDDEN_SIZE = 256
 NUM_LAYERS = 1
 OUTPUT_SIZE = len(tag_set)
 MAX_LENGTH = 150 # Max sequence length in dataset is 124
@@ -187,7 +189,6 @@ dev_dataloader = DataLoader(dev_ds, BATCH_SIZE, shuffle= True)
 test_dataloader = DataLoader(test_ds, BATCH_SIZE, shuffle= True)
 
 # Training
-
 class EarlyStopper:
     def __init__(self, patience=3, min_delta=0):
         self.patience = patience
@@ -261,16 +262,21 @@ def train_model(model, train_dataloader, val_dataloader, early_stop= True, n_epo
             toc2 = time.time()
             # print(f"Time to step: {toc2 - toc}")
             
+            
             # Decode the sentences and get the f1 score using seqeval
             # Get the labels, shape = (sentence, word, categories) -> (sentence, word), where each word is a label from 0 - 9
-            target_idx = y_batch
+            pad_batch = pad_batch.detach().cpu()
+            target_idx = y_batch.detach().cpu()
             # target_idx = torch.max(y_batch, 2)[1]
-            pred_idx = torch.max(y_pred, 2)[1]
+            pred_idx = torch.max(y_pred, 2)[1].detach().cpu()
             
-            vectorized_fn = np.vectorize(index_map.get)
+            # vectorized_fn = np.vectorize(index_map.get)
             # Map the np arrays into np arrays of strings/labels, then unpad them
-            f1 = f1_score([sentence[pad_batch[idx]:].tolist() for idx, sentence in enumerate(vectorized_fn(target_idx.detach().cpu().int()))], 
-                        [sentence[pad_batch[idx]:].tolist() for idx, sentence in enumerate(vectorized_fn(pred_idx.detach().cpu().int()))])
+            # f1 = f1_score([sentence[pad_batch[idx]:].tolist() for idx, sentence in enumerate(vectorized_fn(target_idx.detach().cpu().int()))], 
+            #             [sentence[pad_batch[idx]:].tolist() for idx, sentence in enumerate(vectorized_fn(pred_idx.detach().cpu().int()))])
+            
+            f1 = np.mean(np.array([multiclass_f1_score(pred_idx[i][pad_batch[i]:], target_idx[i][pad_batch[i]:], num_classes= 9) for i in range(len(pred_idx))]))
+
             
             toc = time.time()
             # print(f"Time to score: {toc - toc2}")
@@ -298,14 +304,17 @@ def train_model(model, train_dataloader, val_dataloader, early_stop= True, n_epo
                 
                 test_loss_epoch.append(loss.detach().cpu())
                 
-                target_idx = y_batch
+                pad_batch = pad_batch.detach().cpu()
+                target_idx = y_batch.detach().cpu()
                 # target_idx = torch.max(y_batch, 2)[1]
-                pred_idx = torch.max(y_pred, 2)[1]
+                pred_idx = torch.max(y_pred, 2)[1].detach().cpu()
                 
-                vectorized_fn = np.vectorize(index_map.get)
+                # vectorized_fn = np.vectorize(index_map.get)
                 # Map the np arrays into np arrays of strings/labels, then unpad them
-                f1 = f1_score([sentence[pad_batch[idx]:].tolist() for idx, sentence in enumerate(vectorized_fn(target_idx.detach().cpu().int()))], 
-                            [sentence[pad_batch[idx]:].tolist() for idx, sentence in enumerate(vectorized_fn(pred_idx.detach().cpu().int()))])
+                # f1 = f1_score([sentence[pad_batch[idx]:].tolist() for idx, sentence in enumerate(vectorized_fn(target_idx.detach().cpu().int()))], 
+                #             [sentence[pad_batch[idx]:].tolist() for idx, sentence in enumerate(vectorized_fn(pred_idx.detach().cpu().int()))])
+
+                f1 = np.mean(np.array([multiclass_f1_score(pred_idx[i][pad_batch[i]:], target_idx[i][pad_batch[i]:], num_classes= 9) for i in range(len(pred_idx))]))
                 test_acc_epoch.append(f1)
                 
         # Calculate the epoch acc and loss
