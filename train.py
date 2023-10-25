@@ -57,7 +57,7 @@ print(f"Maximum Sentence Length: {max_length}, Embedding Shape: {vec.shape}, No.
 
 # Build simple LSTM model
 # Define constants/params
-HIDDEN_SIZE = 256
+HIDDEN_SIZE = 64
 NUM_LAYERS = 1
 OUTPUT_SIZE = len(tag_set)
 MAX_LENGTH = 150 # Max sequence length in dataset is 124
@@ -188,6 +188,17 @@ train_dataloader = DataLoader(train_ds, BATCH_SIZE, shuffle= True)
 dev_dataloader = DataLoader(dev_ds, BATCH_SIZE, shuffle= True)
 test_dataloader = DataLoader(test_ds, BATCH_SIZE, shuffle= True)
 
+# Explore data distribution
+print(f"The percentage of data of each label: \n{np.unique(train_ds.y.cpu())}")
+print(index_map)
+print([round(100*i/np.prod(train_ds.y.cpu().shape), 3) for i in np.unique(train_ds.y.cpu(), return_counts= True)[1]])
+print("Weights will be 1/percentage:")
+loss_weights = [round(np.prod(train_ds.y.cpu().shape)/(100*i), 3) for i in np.unique(train_ds.y.cpu(), return_counts= True)[1]]
+print(loss_weights)
+# Remove first label cause it's for padding
+loss_weights = torch.tensor(loss_weights[1:], device= DEVICE).float()
+
+
 # Training
 class EarlyStopper:
     def __init__(self, patience=3, min_delta=0):
@@ -246,7 +257,7 @@ def train_model(model, train_dataloader, val_dataloader, early_stop= True, n_epo
             # print(f"Time to forward pass: {toc-toc2}")
             # print("Passed")
             # loss = nn.functional.cross_entropy(y_pred, y_batch, ignore_index= -100)
-            loss = nn.functional.cross_entropy(torch.swapaxes(y_pred, 1, 2), y_batch, ignore_index= -100)
+            loss = nn.functional.cross_entropy(torch.swapaxes(y_pred, 1, 2), y_batch, ignore_index= -100, weight= loss_weights)
             train_loss_epoch.append(loss.detach().cpu())
             toc2 = time.time()
             # print(f"Time to calculate loss: {toc2 - toc}")
@@ -299,7 +310,7 @@ def train_model(model, train_dataloader, val_dataloader, early_stop= True, n_epo
                 # forward pass
                 y_pred = model(X_batch)
                 # loss = unpad_CrossEntropyLoss(y_pred, y_batch, pad_batch)
-                loss = nn.functional.cross_entropy(torch.swapaxes(y_pred, 1, 2), y_batch, ignore_index= -100)
+                loss = nn.functional.cross_entropy(torch.swapaxes(y_pred, 1, 2), y_batch, ignore_index= -100, weight= loss_weights)
 
                 
                 test_loss_epoch.append(loss.detach().cpu())
