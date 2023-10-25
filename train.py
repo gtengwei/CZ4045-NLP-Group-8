@@ -57,7 +57,7 @@ print(f"Maximum Sentence Length: {max_length}, Embedding Shape: {vec.shape}, No.
 
 # Build simple LSTM model
 # Define constants/params
-HIDDEN_SIZE = 64
+HIDDEN_SIZE = 128
 NUM_LAYERS = 1
 OUTPUT_SIZE = len(tag_set)
 MAX_LENGTH = 150 # Max sequence length in dataset is 124
@@ -220,10 +220,11 @@ class EarlyStopper:
         return False
             
 def train_model(model, train_dataloader, val_dataloader, early_stop= True, n_epochs= 100):
+    global RUNTIME
     # Just in case RUNTIME not updated before training
     if os.path.exists(f"runs/{RUNTIME}"):
         RUNTIME = datetime.now().strftime('%d_%m_%y_%H%M%S')
-    writer = SummaryWriter(f"runs/{RUNTIME}")
+    writer = SummaryWriter(f"runs/{RUNTIME}_{HIDDEN_SIZE}_{NUM_LAYERS}_{BATCH_SIZE}")
     
     
     optimizer = torch.optim.Adam(model.parameters(), lr= 0.001)
@@ -359,5 +360,5 @@ train_loss, train_acc, test_loss, test_acc, epoch_time, best_model = train_model
 # Create folder if not exist
 if not os.path.exists("./train_results/"):
     os.makedirs("./train_results/")
-with open(f"train_results/{RUNTIME}.pkl", "wb") as f:
+with open(f"train_results/{RUNTIME}_{HIDDEN_SIZE}_{NUM_LAYERS}_{BATCH_SIZE}.pkl", "wb") as f:
     pickle.dump((train_loss, train_acc, test_loss, test_acc, epoch_time, best_model), f)
