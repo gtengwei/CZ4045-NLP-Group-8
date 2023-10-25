@@ -62,6 +62,8 @@ NUM_LAYERS = 1
 OUTPUT_SIZE = len(tag_set)
 MAX_LENGTH = 150 # Max sequence length in dataset is 124
 DEVICE = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+# Used to label each run
+RUNTIME = datetime.now().strftime('%d_%m_%y_%H%M%S')
 
 # Training related
 BATCH_SIZE = 1024
@@ -218,8 +220,10 @@ class EarlyStopper:
         return False
             
 def train_model(model, train_dataloader, val_dataloader, early_stop= True, n_epochs= 100):
-    run_time = datetime.now().strftime('%d_%m_%y_%H%M%S')
-    writer = SummaryWriter(f"runs/{run_time}")
+    # Just in case RUNTIME not updated before training
+    if os.path.exists(f"runs/{RUNTIME}"):
+        RUNTIME = datetime.now().strftime('%d_%m_%y_%H%M%S')
+    writer = SummaryWriter(f"runs/{RUNTIME}")
     
     
     optimizer = torch.optim.Adam(model.parameters(), lr= 0.001)
@@ -355,5 +359,5 @@ train_loss, train_acc, test_loss, test_acc, epoch_time, best_model = train_model
 # Create folder if not exist
 if not os.path.exists("./train_results/"):
     os.makedirs("./train_results/")
-with open(f"train_results/{datetime.now().strftime('%d_%m_%y_%H%M%S')}.pkl", "wb") as f:
+with open(f"train_results/{RUNTIME}.pkl", "wb") as f:
     pickle.dump((train_loss, train_acc, test_loss, test_acc, epoch_time, best_model), f)
