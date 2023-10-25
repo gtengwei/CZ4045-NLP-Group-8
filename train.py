@@ -55,7 +55,7 @@ print(f"Maximum Sentence Length: {max_length}, Embedding Shape: {vec.shape}, No.
 
 # Build simple LSTM model
 # Define constants/params
-HIDDEN_SIZE = 32
+HIDDEN_SIZE = 128
 NUM_LAYERS = 1
 OUTPUT_SIZE = len(tag_set)
 MAX_LENGTH = 150 # Max sequence length in dataset is 124
@@ -77,7 +77,7 @@ class simple_lstm(nn.Module):
         
         super().__init__()
         # Model body
-        self.lstm = nn.LSTM(input_size= input_size, hidden_size= hidden_size, bidirectional= bidirectional, num_layers= num_layers)
+        self.lstm = nn.LSTM(input_size= input_size, hidden_size= hidden_size, bidirectional= bidirectional, num_layers= num_layers, batch_first= True)
         
         # Model head
         self.head = nn.Sequential(
