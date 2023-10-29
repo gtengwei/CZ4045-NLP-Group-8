@@ -57,8 +57,8 @@ print(f"Maximum Sentence Length: {max_length}, Embedding Shape: {vec.shape}, No.
 
 # Build simple LSTM model
 # Define constants/params
-HIDDEN_SIZE = 128
-NUM_LAYERS = 1
+HIDDEN_SIZE = 64
+NUM_LAYERS = 2
 OUTPUT_SIZE = len(tag_set)
 MAX_LENGTH = 150 # Max sequence length in dataset is 124
 DEVICE = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
@@ -67,6 +67,7 @@ RUNTIME = datetime.now().strftime('%d_%m_%y_%H%M%S')
 
 # Training related
 BATCH_SIZE = 1024
+PATIENCE = 5
 # Simple LSTM model
 class simple_lstm(nn.Module):
     def __init__(
@@ -219,7 +220,7 @@ class EarlyStopper:
                 return True
         return False
             
-def train_model(model, train_dataloader, val_dataloader, early_stop= True, n_epochs= 100):
+def train_model(model, train_dataloader, val_dataloader, test_dataloader= None, early_stop= True, n_epochs= 100):
     global RUNTIME
     # Just in case RUNTIME not updated before training
     if os.path.exists(f"runs/{RUNTIME}"):
@@ -232,11 +233,13 @@ def train_model(model, train_dataloader, val_dataloader, early_stop= True, n_epo
     torch.autograd.set_detect_anomaly(True)
 
     # Implement early stopping
-    stopper = EarlyStopper()
+    stopper = EarlyStopper(PATIENCE)
 
     # Keep track of epoch loss/acc
     train_loss = []
     train_acc = []
+    val_loss = []
+    val_acc = []
     test_loss = []
     test_acc = []
     epoch_time = []
@@ -248,6 +251,8 @@ def train_model(model, train_dataloader, val_dataloader, early_stop= True, n_epo
         # Keep track of batch loss/acc
         train_loss_epoch = []
         train_acc_epoch = []
+        val_loss_epoch = []
+        val_acc_epoch = []
         test_loss_epoch = []
         test_acc_epoch = []
         model.train()
@@ -306,7 +311,7 @@ def train_model(model, train_dataloader, val_dataloader, early_stop= True, n_epo
         train_acc.append(np.mean(train_acc_epoch))
         
         
-        # Calculate for test set as well
+        # Calculate for validation set as well
         model.eval()
         with torch.no_grad():
             for batch in val_dataloader:
@@ -318,7 +323,7 @@ def train_model(model, train_dataloader, val_dataloader, early_stop= True, n_epo
                 loss = nn.functional.cross_entropy(torch.swapaxes(y_pred, 1, 2), y_batch, ignore_index= -100, weight= loss_weights)
 
                 
-                test_loss_epoch.append(loss.detach().cpu())
+                val_loss_epoch.append(loss.detach().cpu())
                 
                 pad_batch = pad_batch.detach().cpu()
                 target_idx = y_batch.detach().cpu()
@@ -331,34 +336,64 @@ def train_model(model, train_dataloader, val_dataloader, early_stop= True, n_epo
                 #             [sentence[pad_batch[idx]:].tolist() for idx, sentence in enumerate(vectorized_fn(pred_idx.detach().cpu().int()))])
 
                 f1 = np.mean(np.array([multiclass_f1_score(pred_idx[i][pad_batch[i]:], target_idx[i][pad_batch[i]:], num_classes= 9) for i in range(len(pred_idx))]))
-                test_acc_epoch.append(f1)
+                val_acc_epoch.append(f1)
                 
         # Calculate the epoch acc and loss
-        test_loss.append(np.mean(test_loss_epoch))
-        test_acc.append(np.mean(test_acc_epoch))
+        val_loss.append(np.mean(val_loss_epoch))
+        val_acc.append(np.mean(val_acc_epoch))
+        
+        # Calculate for test set if applicable
+        if test_dataloader:
+            model.eval()
+            with torch.no_grad():
+                for batch in test_dataloader:
+                    # take a batch
+                    X_batch, y_batch, pad_batch = batch
+                    # forward pass
+                    y_pred = model(X_batch)
+                    # loss = unpad_CrossEntropyLoss(y_pred, y_batch, pad_batch)
+                    loss = nn.functional.cross_entropy(torch.swapaxes(y_pred, 1, 2), y_batch, ignore_index= -100, weight= loss_weights)
+
+                    
+                    test_loss_epoch.append(loss.detach().cpu())
+                    
+                    pad_batch = pad_batch.detach().cpu()
+                    target_idx = y_batch.detach().cpu()
+                    pred_idx = torch.max(y_pred, 2)[1].detach().cpu()
+                    
+                    f1 = np.mean(np.array([multiclass_f1_score(pred_idx[i][pad_batch[i]:], target_idx[i][pad_batch[i]:], num_classes= 9) for i in range(len(pred_idx))]))
+                    test_acc_epoch.append(f1)
+                    
+            # Calculate the epoch acc and loss
+            test_loss.append(np.mean(test_loss_epoch))
+            test_acc.append(np.mean(test_acc_epoch))
         # print(f"Epoch: {epoch} Train Loss: {train_loss[-1]} Test Loss: {test_loss[-1]}")
         
         epoch_time.append(time.time() - tic)
         
         # Break loop if early stopping in activate
-        if stopper.early_stop(test_loss[-1]) and early_stop:
+        if stopper.early_stop(val_loss[-1]) and early_stop:
             print(f"Early stop at epoch {epoch + 1}/{n_epochs}")
             break
         
-        writer.add_scalars("Epoch Loss", {"Train Loss":train_loss[-1], "Val Loss":test_loss[-1]}, epoch)
-        writer.add_scalars("Epoch F1", {"Train F1":train_acc[-1], "Val F1":test_acc[-1]}, epoch)
+        if test_dataloader:
+            writer.add_scalars("Epoch Loss", {"Train Loss":train_loss[-1], "Val Loss":val_loss[-1], "Test Loss":test_loss[-1]}, epoch)
+            writer.add_scalars("Epoch F1", {"Train F1":train_acc[-1], "Val F1":val_acc[-1], "Test F1":test_acc[-1]}, epoch)
+        else:
+            writer.add_scalars("Epoch Loss", {"Train Loss":train_loss[-1], "Val Loss":test_loss[-1]}, epoch)
+            writer.add_scalars("Epoch F1", {"Train F1":train_acc[-1], "Val F1":test_acc[-1]}, epoch)
         
-        if test_acc[-1] == min(test_acc):
+        if val_acc[-1] == min(val_acc):
             best_model = model.state_dict()
     
     # Return last epoch's acc and time
-    return train_loss, train_acc, test_loss, test_acc, epoch_time, best_model
+    return train_loss, train_acc, val_loss, val_acc, test_loss, test_acc, epoch_time, best_model
 
 model = simple_lstm().to(DEVICE)
-train_loss, train_acc, test_loss, test_acc, epoch_time, best_model = train_model(model, train_dataloader, dev_dataloader)
+train_loss, train_acc, val_loss, val_acc, test_loss, test_acc, epoch_time, best_model = train_model(model, train_dataloader, dev_dataloader, test_dataloader)
 
 # Create folder if not exist
 if not os.path.exists("./train_results/"):
     os.makedirs("./train_results/")
 with open(f"train_results/{RUNTIME}_{HIDDEN_SIZE}_{NUM_LAYERS}_{BATCH_SIZE}.pkl", "wb") as f:
-    pickle.dump((train_loss, train_acc, test_loss, test_acc, epoch_time, best_model), f)
+    pickle.dump((train_loss, train_acc, val_loss, val_acc, test_loss, test_acc, epoch_time, best_model), f)
