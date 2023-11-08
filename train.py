@@ -243,6 +243,9 @@ def train_model(model, train_dataloader, val_dataloader, test_dataloader= None, 
     test_loss = []
     test_acc = []
     epoch_time = []
+    train_preds = []
+    val_preds = []
+    test_preds = []
     
     batch_count = 0
     
@@ -255,6 +258,9 @@ def train_model(model, train_dataloader, val_dataloader, test_dataloader= None, 
         val_acc_epoch = []
         test_loss_epoch = []
         test_acc_epoch = []
+        train_preds_epoch = []
+        val_preds_epoch = []
+        test_preds_epoch = []
         model.train()
         for batch in train_dataloader:
             # print("In batch")
@@ -294,10 +300,12 @@ def train_model(model, train_dataloader, val_dataloader, test_dataloader= None, 
             # vectorized_fn = np.vectorize(index_map.get)
             # Map the np arrays into np arrays of strings/labels, then unpad them
             # f1 = f1_score([sentence[pad_batch[idx]:].tolist() for idx, sentence in enumerate(vectorized_fn(target_idx.detach().cpu().int()))], 
-            #             [sentence[pad_batch[idx]:].tolist() for idx, sentence in enumerate(vectorized_fn(pred_idx.detach().cpu().int()))])
+                        # [sentence[pad_batch[idx]:].tolist() for idx, sentence in enumerate(vectorized_fn(pred_idx.detach().cpu().int()))])
             
             f1 = np.mean(np.array([multiclass_f1_score(pred_idx[i][pad_batch[i]:], target_idx[i][pad_batch[i]:], num_classes= 9) for i in range(len(pred_idx))]))
 
+            # Save the predictions and pad_batch
+            train_preds_epoch.append(torch.concat([target_idx.int(), pred_idx.int(), pad_batch.int().unsqueeze(1)], dim= 1))
             
             toc = time.time()
             # print(f"Time to score: {toc - toc2}")
@@ -309,7 +317,8 @@ def train_model(model, train_dataloader, val_dataloader, test_dataloader= None, 
         # Calculate the epoch acc and loss
         train_loss.append(np.mean(train_loss_epoch))
         train_acc.append(np.mean(train_acc_epoch))
-        
+        # Save the prediction results per epoch, since train_preds_epoch each elem is a batch
+        train_preds.append(torch.concat(train_preds_epoch, dim=0))
         
         # Calculate for validation set as well
         model.eval()
@@ -330,17 +339,17 @@ def train_model(model, train_dataloader, val_dataloader, test_dataloader= None, 
                 # target_idx = torch.max(y_batch, 2)[1]
                 pred_idx = torch.max(y_pred, 2)[1].detach().cpu()
                 
-                # vectorized_fn = np.vectorize(index_map.get)
-                # Map the np arrays into np arrays of strings/labels, then unpad them
-                # f1 = f1_score([sentence[pad_batch[idx]:].tolist() for idx, sentence in enumerate(vectorized_fn(target_idx.detach().cpu().int()))], 
-                #             [sentence[pad_batch[idx]:].tolist() for idx, sentence in enumerate(vectorized_fn(pred_idx.detach().cpu().int()))])
-
+                # Save the predictions and pad_batch
+                val_preds_epoch.append(torch.concat([target_idx.int(), pred_idx.int(), pad_batch.int().unsqueeze(1)], dim= 1))
+            
+            
                 f1 = np.mean(np.array([multiclass_f1_score(pred_idx[i][pad_batch[i]:], target_idx[i][pad_batch[i]:], num_classes= 9) for i in range(len(pred_idx))]))
                 val_acc_epoch.append(f1)
                 
         # Calculate the epoch acc and loss
         val_loss.append(np.mean(val_loss_epoch))
         val_acc.append(np.mean(val_acc_epoch))
+        val_preds.append(torch.concat(val_preds_epoch, dim=0))
         
         # Calculate for test set if applicable
         if test_dataloader:
@@ -360,21 +369,19 @@ def train_model(model, train_dataloader, val_dataloader, test_dataloader= None, 
                     pad_batch = pad_batch.detach().cpu()
                     target_idx = y_batch.detach().cpu()
                     pred_idx = torch.max(y_pred, 2)[1].detach().cpu()
-                    
+                    # Save the predictions and pad_batch
+                    test_preds_epoch.append(torch.concat([target_idx.int(), pred_idx.int(), pad_batch.int().unsqueeze(1)], dim= 1))
                     f1 = np.mean(np.array([multiclass_f1_score(pred_idx[i][pad_batch[i]:], target_idx[i][pad_batch[i]:], num_classes= 9) for i in range(len(pred_idx))]))
                     test_acc_epoch.append(f1)
                     
             # Calculate the epoch acc and loss
             test_loss.append(np.mean(test_loss_epoch))
             test_acc.append(np.mean(test_acc_epoch))
+            test_preds.append(torch.concat(test_preds_epoch, dim=0))
         # print(f"Epoch: {epoch} Train Loss: {train_loss[-1]} Test Loss: {test_loss[-1]}")
         
         epoch_time.append(time.time() - tic)
         
-        # Break loop if early stopping in activate
-        if stopper.early_stop(val_loss[-1]) and early_stop:
-            print(f"Early stop at epoch {epoch + 1}/{n_epochs}")
-            break
         
         if test_dataloader:
             writer.add_scalars("Epoch Loss", {"Train Loss":train_loss[-1], "Val Loss":val_loss[-1], "Test Loss":test_loss[-1]}, epoch)
@@ -383,17 +390,34 @@ def train_model(model, train_dataloader, val_dataloader, test_dataloader= None, 
             writer.add_scalars("Epoch Loss", {"Train Loss":train_loss[-1], "Val Loss":test_loss[-1]}, epoch)
             writer.add_scalars("Epoch F1", {"Train F1":train_acc[-1], "Val F1":test_acc[-1]}, epoch)
         
-        if val_acc[-1] == min(val_acc):
+        if val_loss[-1] == min(val_loss):
             best_model = model.state_dict()
     
+        # Break loop if early stopping in activate
+        if stopper.early_stop(val_loss[-1]) and early_stop:
+            print(f"Early stop at epoch {epoch + 1}/{n_epochs}")
+            break
     # Return last epoch's acc and time
-    return train_loss, train_acc, val_loss, val_acc, test_loss, test_acc, epoch_time, best_model
+    # return train_loss, train_acc, val_loss, val_acc, test_loss, test_acc, epoch_time, best_model
+    return {
+        "train_loss":train_loss,
+        "train_acc":train_acc,
+        "train_preds":train_preds,
+        "val_loss":val_loss, 
+        "val_acc":val_acc, 
+        "val_preds":val_preds,
+        "test_loss":test_loss, 
+        "test_acc":test_acc, 
+        "test_preds":test_preds,
+        "epoch_time":epoch_time, 
+        "best_model":best_model
+    }
 
 model = simple_lstm().to(DEVICE)
-train_loss, train_acc, val_loss, val_acc, test_loss, test_acc, epoch_time, best_model = train_model(model, train_dataloader, dev_dataloader, test_dataloader)
+results = train_model(model, train_dataloader, dev_dataloader, test_dataloader)
 
 # Create folder if not exist
 if not os.path.exists("./train_results/"):
     os.makedirs("./train_results/")
 with open(f"train_results/{RUNTIME}_{HIDDEN_SIZE}_{NUM_LAYERS}_{BATCH_SIZE}.pkl", "wb") as f:
-    pickle.dump((train_loss, train_acc, val_loss, val_acc, test_loss, test_acc, epoch_time, best_model), f)
+    pickle.dump(results, f)
